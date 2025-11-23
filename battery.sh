@@ -107,25 +107,29 @@ Usage:
 "
 
 # Visudo instructions
+# File location: /etc/sudoers.d/battery
+# Purpose: Allows this script to execute 'sudo smc -w' commands without a user password.
 visudoconfig="
 # Visudo settings for the battery utility installed from https://github.com/actuallymentor/battery
 # intended to be placed in $visudo_file on a mac
-Cmnd_Alias      BATTERYOFF = $binfolder/smc -k CH0B -w 02, $binfolder/smc -k CH0C -w 02, $binfolder/smc -k CH0B -r, $binfolder/smc -k CH0C -r
-Cmnd_Alias      BATTERYON = $binfolder/smc -k CH0B -w 00, $binfolder/smc -k CH0C -w 00
-Cmnd_Alias      DISCHARGEOFF = $binfolder/smc -k CH0I -w 00, $binfolder/smc -k CH0I -r
-Cmnd_Alias      DISCHARGEON = $binfolder/smc -k CH0I -w 01
-Cmnd_Alias      LEDCONTROL = $binfolder/smc -k ACLC -w 04, $binfolder/smc -k ACLC -w 03, $binfolder/smc -k ACLC -w 02, $binfolder/smc -k ACLC -w 01, $binfolder/smc -k ACLC -w 00, $binfolder/smc -k ACLC -r
-Cmnd_Alias      CHTE = $binfolder/smc -k CHTE -r, $binfolder/smc -k CHTE -w 00000000, $binfolder/smc -k CHTE -w 01000000
-Cmnd_Alias      CHIE = $binfolder/smc -k CHIE -r, $binfolder/smc -k CHIE -w 08, $binfolder/smc -k CHIE -w 00
-Cmnd_Alias      CH0J = $binfolder/smc -k CH0J -r, $binfolder/smc -k CH0J -w 01, $binfolder/smc -k CH0J -w 00
-ALL ALL = NOPASSWD: BATTERYOFF
-ALL ALL = NOPASSWD: BATTERYON
-ALL ALL = NOPASSWD: DISCHARGEOFF
-ALL ALL = NOPASSWD: DISCHARGEON
-ALL ALL = NOPASSWD: LEDCONTROL
-ALL ALL = NOPASSWD: CHTE
-ALL ALL = NOPASSWD: CHIE
-ALL ALL = NOPASSWD: CH0J
+
+# Passwordless SMC writing commands used by battery.sh
+Cmnd_Alias    CHARGING_OFF = $binfolder/smc -k CH0B -w 02, $binfolder/smc -k CH0C -w 02, $binfolder/smc -k CHTE -w 01000000
+Cmnd_Alias    CHARGING_ON = $binfolder/smc -k CH0B -w 00, $binfolder/smc -k CH0C -w 00, $binfolder/smc -k CHTE -w 00000000
+Cmnd_Alias    FORCE_DISCHARGE_OFF = $binfolder/smc -k CH0I -w 00, $binfolder/smc -k CHIE -w 00, $binfolder/smc -k CH0J -w 00
+Cmnd_Alias    FORCE_DISCHARGE_ON = $binfolder/smc -k CH0I -w 01, $binfolder/smc -k CHIE -w 08, $binfolder/smc -k CH0J -w 01
+Cmnd_Alias    LED_CONTROL = $binfolder/smc -k ACLC -w 04, $binfolder/smc -k ACLC -w 03, $binfolder/smc -k ACLC -w 02, $binfolder/smc -k ACLC -w 01, $binfolder/smc -k ACLC -w 00
+ALL ALL = NOPASSWD: CHARGING_OFF
+ALL ALL = NOPASSWD: CHARGING_ON
+ALL ALL = NOPASSWD: FORCE_DISCHARGE_OFF
+ALL ALL = NOPASSWD: FORCE_DISCHARGE_ON
+ALL ALL = NOPASSWD: LED_CONTROL
+
+# Temporarily keep passwordless SMC reading commands so the old menubar GUI versions don't ask for password on each launch
+# trying to execute 'battery visudo'. There is no harm in removing this, so do it as soon as you believe users are no
+# longer using old versions.
+Cmnd_Alias TMP_OLD_GUI_COMPATIBILITY = $binfolder/smc -k CH0B -r, $binfolder/smc -k CH0C -r, $binfolder/smc -k CH0I -r, $binfolder/smc -k ACLC -r, $binfolder/smc -k CHTE -r, $binfolder/smc -k CHIE -r, $binfolder/smc -k CH0J -r
+ALL ALL = NOPASSWD: TMP_OLD_GUI_COMPATIBILITY
 "
 
 # Get parameters
@@ -187,7 +191,7 @@ function valid_voltage() {
 
 function smc_read_hex() {
 	key=$1
-	line=$(echo $(sudo smc -k $key -r))
+	line=$(echo $(smc -k $key -r))
 	if [[ $line =~ "no data" ]]; then
 		echo
 	else
@@ -208,11 +212,11 @@ function smc_write_hex() {
 ## #########################
 ## Detect supported SMC keys
 ## #########################
-[[ $(sudo smc -k CHTE -r) =~ "no data" ]] && smc_supports_tahoe=false || smc_supports_tahoe=true;
-[[ $(sudo smc -k CH0B -r) =~ "no data" ]] && smc_supports_legacy=false || smc_supports_legacy=true;
-[[ $(sudo smc -k CHIE -r) =~ "no data" ]] && smc_supports_adapter_chie=false || smc_supports_adapter_chie=true;
-[[ $(sudo smc -k CH0I -r) =~ "no data" ]] && smc_supports_adapter_ch0i=false || smc_supports_adapter_ch0i=true;
-[[ $(sudo smc -k CH0J -r) =~ "no data" || $(sudo smc -k CH0J -r) =~ "Error" ]] && smc_supports_adapter_ch0j=false || smc_supports_adapter_ch0j=true;
+[[ $(smc -k CHTE -r) =~ "no data" ]] && smc_supports_tahoe=false || smc_supports_tahoe=true;
+[[ $(smc -k CH0B -r) =~ "no data" ]] && smc_supports_legacy=false || smc_supports_legacy=true;
+[[ $(smc -k CHIE -r) =~ "no data" ]] && smc_supports_adapter_chie=false || smc_supports_adapter_chie=true;
+[[ $(smc -k CH0I -r) =~ "no data" ]] && smc_supports_adapter_ch0i=false || smc_supports_adapter_ch0i=true;
+[[ $(smc -k CH0J -r) =~ "no data" || $(smc -k CH0J -r) =~ "Error" ]] && smc_supports_adapter_ch0j=false || smc_supports_adapter_ch0j=true;
 
 function log_smc_capabilities() {
 	log "SMC capabilities: tahoe=$smc_supports_tahoe legacy=$smc_supports_legacy CHIE=$smc_supports_adapter_chie CH0I=$smc_supports_adapter_ch0i CH0J=$smc_supports_adapter_ch0j"
@@ -425,7 +429,7 @@ if [ -z "$action" ] || [[ "$action" == "help" ]]; then
 	exit 0
 fi
 
-# Visudo message
+# Update '/etc/sudoers.d/battery' config if needed
 if [[ "$action" == "visudo" ]]; then
 
 	# User to set folder ownership to is $setting if it is defined and $USER otherwise
