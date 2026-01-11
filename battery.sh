@@ -229,16 +229,9 @@ function log_smc_capabilities() {
 # Change magsafe color
 # see community sleuthing: https://github.com/actuallymentor/battery/issues/71
 function change_magsafe_led_color() {
-	log "MagSafe LED function invoked"
-	color=$1
+	local color=$1
 
-	# Check whether user can run color changes without password (required for backwards compatibility)
-	if sudo -n smc -k ACLC -r &>/dev/null; then
-		log "💡 Setting magsafe color to $color"
-	else
-		log "🚨 Your version of battery is using an old visudo file, please run 'battery visudo' to fix this, until you do battery cannot change magsafe led colors"
-		return
-	fi
+	log "💡 Setting magsafe color to $color"
 
 	if [[ "$color" == "green" ]]; then
 		log "setting LED to green"
