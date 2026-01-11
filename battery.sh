@@ -450,6 +450,9 @@ if [[ "$action" == "visudo" ]]; then
 			sudo chmod 440 $visudo_file
 		fi
 
+		# Delete tempfile
+		rm $visudo_tmpfile
+
 		# exit because no changes are needed
 		exit 0
 
