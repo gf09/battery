@@ -12,7 +12,6 @@ PATH=/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin
 ## ###############
 ## Variables
 ## ###############
-binfolder=/usr/local/bin
 visudo_folder=/private/etc/sudoers.d
 visudo_file=${visudo_folder}/battery
 configfolder=$HOME/.battery
@@ -28,6 +27,28 @@ voltage_min="10.5"
 voltage_max="12.6"
 voltage_hyst_min="0.1"
 voltage_hyst_max="2"
+
+# SECURITY NOTES:
+# - ALWAYS hardcode and use the absolute path to the battery executables to avoid PATH-based spoofing.
+#   Think of the scenario where 'battery update_silent' running as root invokes 'battery visudo' as a
+#   PATH spoofing opportunity example.
+# - Ensure /usr/local/bin folder, this script, and the smc binary are root-owned and not writable by
+#   the user or others.
+# - Ensure that you are not sourcing any user-writable scripts within this script to avoid overrides of
+#   critical variables.
+binfolder=/usr/local/bin
+battery_binary="$binfolder/battery"
+smc_binary="$binfolder/smc"
+
+# GitHub URLs for setup and updates.
+# Temporarily set to your username and branch to test update functionality with your fork.
+# Security note: Do NOT allow github_user or github_branch to be injected via environment
+#                variables or any other means. Keep them hardcoded.
+github_user="actuallymentor"
+github_branch="main"
+github_url_setup_sh="https://raw.githubusercontent.com/${github_user}/battery/${github_branch}/setup.sh"
+github_url_update_sh="https://raw.githubusercontent.com/${github_user}/battery/${github_branch}/update.sh"
+github_url_battery_sh="https://raw.githubusercontent.com/${github_user}/battery/${github_branch}/battery.sh"
 
 ## ###############
 ## Housekeeping
@@ -108,17 +129,23 @@ Usage:
 
 # Visudo instructions
 # File location: /etc/sudoers.d/battery
-# Purpose: Allows this script to execute 'sudo smc -w' commands without a user password.
+# Purpose:
+# - Allows this script to execute 'sudo smc -w' commands without requiring a user password.
+# - Allows passwordless updates.
 visudoconfig="
 # Visudo settings for the battery utility installed from https://github.com/actuallymentor/battery
 # intended to be placed in $visudo_file on a mac
 
-# Passwordless SMC writing commands used by battery.sh
-Cmnd_Alias    CHARGING_OFF = $binfolder/smc -k CH0B -w 02, $binfolder/smc -k CH0C -w 02, $binfolder/smc -k CHTE -w 01000000
-Cmnd_Alias    CHARGING_ON = $binfolder/smc -k CH0B -w 00, $binfolder/smc -k CH0C -w 00, $binfolder/smc -k CHTE -w 00000000
-Cmnd_Alias    FORCE_DISCHARGE_OFF = $binfolder/smc -k CH0I -w 00, $binfolder/smc -k CHIE -w 00, $binfolder/smc -k CH0J -w 00
-Cmnd_Alias    FORCE_DISCHARGE_ON = $binfolder/smc -k CH0I -w 01, $binfolder/smc -k CHIE -w 08, $binfolder/smc -k CH0J -w 01
-Cmnd_Alias    LED_CONTROL = $binfolder/smc -k ACLC -w 04, $binfolder/smc -k ACLC -w 03, $binfolder/smc -k ACLC -w 02, $binfolder/smc -k ACLC -w 01, $binfolder/smc -k ACLC -w 00
+# Allow passwordless update (All battery app executables are owned by root to prevent privilege escalation attacks)
+ALL ALL = NOPASSWD: $battery_binary update_silent
+ALL ALL = NOPASSWD: $battery_binary update_silent is_enabled
+
+# Allow passwordless battery-charging–related SMC write commands
+Cmnd_Alias    CHARGING_OFF = $smc_binary -k CH0B -w 02, $smc_binary -k CH0C -w 02, $smc_binary -k CHTE -w 01000000
+Cmnd_Alias    CHARGING_ON = $smc_binary -k CH0B -w 00, $smc_binary -k CH0C -w 00, $smc_binary -k CHTE -w 00000000
+Cmnd_Alias    FORCE_DISCHARGE_OFF = $smc_binary -k CH0I -w 00, $smc_binary -k CHIE -w 00, $smc_binary -k CH0J -w 00
+Cmnd_Alias    FORCE_DISCHARGE_ON = $smc_binary -k CH0I -w 01, $smc_binary -k CHIE -w 08, $smc_binary -k CH0J -w 01
+Cmnd_Alias    LED_CONTROL = $smc_binary -k ACLC -w 04, $smc_binary -k ACLC -w 03, $smc_binary -k ACLC -w 02, $smc_binary -k ACLC -w 01, $smc_binary -k ACLC -w 00
 ALL ALL = NOPASSWD: CHARGING_OFF
 ALL ALL = NOPASSWD: CHARGING_ON
 ALL ALL = NOPASSWD: FORCE_DISCHARGE_OFF
@@ -128,12 +155,11 @@ ALL ALL = NOPASSWD: LED_CONTROL
 # Temporarily keep passwordless SMC reading commands so the old menubar GUI versions don't ask for password on each launch
 # trying to execute 'battery visudo'. There is no harm in removing this, so do it as soon as you believe users are no
 # longer using old versions.
-Cmnd_Alias TMP_OLD_GUI_COMPATIBILITY = $binfolder/smc -k CH0B -r, $binfolder/smc -k CH0C -r, $binfolder/smc -k CH0I -r, $binfolder/smc -k ACLC -r, $binfolder/smc -k CHTE -r, $binfolder/smc -k CHIE -r, $binfolder/smc -k CH0J -r
+Cmnd_Alias TMP_OLD_GUI_COMPATIBILITY = $smc_binary -k CH0B -r, $smc_binary -k CH0C -r, $smc_binary -k CH0I -r, $smc_binary -k ACLC -r, $smc_binary -k CHTE -r, $smc_binary -k CHIE -r, $smc_binary -k CH0J -r
 ALL ALL = NOPASSWD: TMP_OLD_GUI_COMPATIBILITY
 "
 
 # Get parameters
-battery_binary=$0
 action=$1
 setting=$2
 subsetting=$3
@@ -191,7 +217,7 @@ function valid_voltage() {
 
 function smc_read_hex() {
 	key=$1
-	line=$(echo $(smc -k $key -r))
+	line=$(echo $($smc_binary -k $key -r))
 	if [[ $line =~ "no data" ]]; then
 		echo
 	else
@@ -202,7 +228,7 @@ function smc_read_hex() {
 function smc_write_hex() {
 	local key=$1
 	local hex_value=$2
-	if ! sudo smc -k "$key" -w "$hex_value" >/dev/null 2>&1; then
+	if ! sudo $smc_binary -k "$key" -w "$hex_value" >/dev/null 2>&1; then
 		log "⚠️ Failed to write $hex_value to $key"
 		return 1
 	fi
@@ -212,11 +238,11 @@ function smc_write_hex() {
 ## #########################
 ## Detect supported SMC keys
 ## #########################
-[[ $(smc -k CHTE -r) =~ "no data" ]] && smc_supports_tahoe=false || smc_supports_tahoe=true;
-[[ $(smc -k CH0B -r) =~ "no data" ]] && smc_supports_legacy=false || smc_supports_legacy=true;
-[[ $(smc -k CHIE -r) =~ "no data" ]] && smc_supports_adapter_chie=false || smc_supports_adapter_chie=true;
-[[ $(smc -k CH0I -r) =~ "no data" ]] && smc_supports_adapter_ch0i=false || smc_supports_adapter_ch0i=true;
-[[ $(smc -k CH0J -r) =~ "no data" || $(smc -k CH0J -r) =~ "Error" ]] && smc_supports_adapter_ch0j=false || smc_supports_adapter_ch0j=true;
+[[ $($smc_binary -k CHTE -r) =~ "no data" ]] && smc_supports_tahoe=false || smc_supports_tahoe=true;
+[[ $($smc_binary -k CH0B -r) =~ "no data" ]] && smc_supports_legacy=false || smc_supports_legacy=true;
+[[ $($smc_binary -k CHIE -r) =~ "no data" ]] && smc_supports_adapter_chie=false || smc_supports_adapter_chie=true;
+[[ $($smc_binary -k CH0I -r) =~ "no data" ]] && smc_supports_adapter_ch0i=false || smc_supports_adapter_ch0i=true;
+[[ $($smc_binary -k CH0J -r) =~ "no data" || $($smc_binary -k CH0J -r) =~ "Error" ]] && smc_supports_adapter_ch0j=false || smc_supports_adapter_ch0j=true;
 
 function log_smc_capabilities() {
 	log "SMC capabilities: tahoe=$smc_supports_tahoe legacy=$smc_supports_legacy CHIE=$smc_supports_adapter_chie CH0I=$smc_supports_adapter_ch0i CH0J=$smc_supports_adapter_ch0j"
@@ -235,14 +261,14 @@ function change_magsafe_led_color() {
 
 	if [[ "$color" == "green" ]]; then
 		log "setting LED to green"
-		sudo smc -k ACLC -w 03
+		sudo $smc_binary -k ACLC -w 03
 	elif [[ "$color" == "orange" ]]; then
 		log "setting LED to orange"
-		sudo smc -k ACLC -w 04
+		sudo $smc_binary -k ACLC -w 04
 	else
 		# Default action: reset. Value 00 is a guess and needs confirmation
 		log "resetting LED"
-		sudo smc -k ACLC -w 00
+		sudo $smc_binary -k ACLC -w 00
 	fi
 }
 
@@ -257,7 +283,7 @@ function enable_discharging() {
 	else
 		smc_write_hex CH0I 01
 	fi
-	sudo smc -k ACLC -w 01
+	sudo $smc_binary -k ACLC -w 01
 }
 
 function disable_discharging() {
@@ -412,9 +438,117 @@ function get_voltage() {
 	echo "$voltage"
 }
 
+## ##################
+## Miscellany helpers
+## ##################
+
+function determine_unprivileged_user() {
+	local username="$1"
+	if [[ "$username" == "root" ]]; then
+		log "⚠️ 'battery $action $setting $subsetting': argument user is root, trying to recover" >&2
+		username=""
+	fi
+	if [[ -z "$username" && -n "$SUDO_USER" && "$SUDO_USER" != "root" ]]; then
+		username="$SUDO_USER"
+	fi
+	if [[ -z "$username" && -n "$USER" && "$USER" != "root" ]]; then
+		username="$USER"
+	fi
+	if [[ -z "$username" && "$HOME" == /Users/* ]]; then
+		username="$(basename "$HOME")";
+	fi
+	if [[ -z "$username" ]]; then
+		log "⚠️ 'battery $action $setting $subsetting': unable to determine unprivileged user; falling back to 'logname'" >&2
+		username="$(logname 2>/dev/null || true)"
+	fi
+	echo "$username"
+}
+
+function assert_unprivileged_user() {
+	local username="$1"
+	if [[ -z "$username" || "$username" == "root" ]]; then
+		log "❌ 'battery $action $setting $subsetting': failed to determine unprivileged user"
+		exit 11
+	fi
+}
+
+function assert_not_running_as_root() {
+	if [[ $EUID -eq 0 ]]; then
+		echo " ❌ The following command should not be executed with root privileges:"
+		echo "        battery $action $setting $subsetting"
+		echo "    Please, try running without 'sudo'"
+		exit 1
+	fi
+}
+
+function assert_running_as_root() {
+	if [[ $EUID -ne 0 ]]; then
+		log "❌ battery $action $setting $subsetting: must be executed with root privileges"
+		exit 1
+	fi
+}
+
+function ensure_owner() {
+	local owner="$1" group="$2" path="$3"
+	[[ -e $path ]] || { return 1; }
+	local cur_owner=$(stat -f '%Su' "$path")
+	local cur_group=$(stat -f '%Sg' "$path")
+	if [[ $cur_owner != "$owner" || $cur_group != "$group" ]]; then
+		sudo chown "${owner}:${group}" "$path"
+	fi
+}
+
+function ensure_owner_mode() {
+	local owner="$1" group="$2" mode="$3" path="$4"
+	ensure_owner "$owner" "$group" "$path" || return
+	local cur_mode=$(stat -f '%Lp' "$path")
+	if [[ $cur_mode != "${mode#0}" ]]; then
+		sudo chmod "$mode" "$path"
+	fi
+}
+
+# Use the following function to apply any setup related fixes which require root permissions.
+# This function is executed by 'update_silent' action with EUID==0.
+function fixup_installation_owner_mode() {
+	local username=$1
+
+	ensure_owner_mode root wheel 755 "$visudo_folder"
+	ensure_owner_mode root wheel 440 "$visudo_file"
+
+	ensure_owner_mode root wheel 755 "$binfolder"
+	ensure_owner_mode root wheel 755 "$battery_binary"
+	ensure_owner_mode root wheel 755 "$smc_binary"
+
+	ensure_owner_mode $username staff 755 "$(dirname "$daemon_path")"
+	ensure_owner_mode $username staff 644 "$daemon_path"
+
+	ensure_owner_mode $username staff 755 "$configfolder"
+	ensure_owner_mode $username staff 644 "$pidfile"
+	ensure_owner_mode $username staff 644 "$logfile"
+	ensure_owner_mode $username staff 644 "$maintain_percentage_tracker_file"
+	ensure_owner_mode $username staff 644 "$maintain_voltage_tracker_file"
+	ensure_owner_mode $username staff 644 "$calibrate_pidfile"
+
+	# Do some cleanup after previous versions
+	sudo rm -f "$configfolder/visudo.tmp"
+}
+
+function is_latest_version_installed() {
+	curl -sS "$github_url_battery_sh" 2>/dev/null | grep -q "$BATTERY_CLI_VERSION"
+}
+
 ## ###############
 ## Actions
 ## ###############
+
+# If the config folder or log file were just created by the code above while
+# running as root, set the correct ownership and permissions.
+if [[ $EUID -eq 0 ]]; then
+	username="$(determine_unprivileged_user "$SUDO_USER")"
+	if [[ -n "$username" && "$username" != "root" ]]; then
+		fixup_installation_owner_mode "$username"
+	fi
+fi
 
 # Help message
 if [ -z "$action" ] || [[ "$action" == "help" ]]; then
@@ -425,33 +559,31 @@ fi
 # Update '/etc/sudoers.d/battery' config if needed
 if [[ "$action" == "visudo" ]]; then
 
-	# User to set folder ownership to is $setting if it is defined and $USER otherwise
-	if [[ -z "$setting" ]]; then
-		setting=$USER
-	fi
-
-	# Set visudo tempfile ownership to current user
-	log "Setting visudo file permissions to $setting"
-	sudo chown -R $setting $configfolder
+	# Allocate temp folder
+	tempfolder="$(mktemp -d)"
+	function cleanup() { rm -rf "$tempfolder"; }
+	trap cleanup EXIT
 
 	# Write the visudo file to a tempfile
-	visudo_tmpfile="$configfolder/visudo.tmp"
-	sudo rm $visudo_tmpfile 2>/dev/null
+	visudo_tmpfile="$tempfolder/visudo.tmp"
 	echo -e "$visudoconfig" >$visudo_tmpfile
+
+	# If the visudo folder does not exist, make it
+	if ! test -d "$visudo_folder"; then
+		sudo mkdir -p "$visudo_folder"
+	fi
+	ensure_owner_mode root wheel 755 "$visudo_folder"
 
 	# If the visudo file is the same (no error, exit code 0), set the permissions just
 	if sudo cmp $visudo_file $visudo_tmpfile &>/dev/null; then
 
-		echo "The existing battery visudo file is what it should be for version $BATTERY_CLI_VERSION"
+		echo "☑️  The existing battery visudo file is what it should be for version $BATTERY_CLI_VERSION"
 
 		# Check if file permissions are correct, if not, set them
-		current_visudo_file_permissions=$(stat -f "%Lp" $visudo_file)
-		if [[ "$current_visudo_file_permissions" != "440" ]]; then
-			sudo chmod 440 $visudo_file
-		fi
+		ensure_owner_mode root wheel 440 "$visudo_file"
 
-		# Delete tempfile
-		rm $visudo_tmpfile
+		# Delete tempfolder
+		rm -rf "$tempfolder"
 
 		# exit because no changes are needed
 		exit 0
@@ -461,24 +593,19 @@ if [[ "$action" == "visudo" ]]; then
 	# Validate that the visudo tempfile is valid
 	if sudo visudo -c -f $visudo_tmpfile &>/dev/null; then
 
-		# If the visudo folder does not exist, make it
-		if ! test -d "$visudo_folder"; then
-			sudo mkdir -p "$visudo_folder"
-		fi
-
 		# Copy the visudo file from tempfile to live location
 		sudo cp $visudo_tmpfile $visudo_file
 
-		# Delete tempfile
-		rm $visudo_tmpfile
-
 		# Set correct permissions on visudo file
-		sudo chmod 440 $visudo_file
+		ensure_owner_mode root wheel 440 "$visudo_file"
 
-		echo "Visudo file updated successfully"
+		# Delete tempfolder
+		rm -rf "$tempfolder"
+
+		echo "✅ Visudo file updated successfully"
 
 	else
-		echo "Error validating visudo file, this should never happen:"
+		echo "❌ Error validating visudo file, this should never happen:"
 		sudo visudo -c -f $visudo_tmpfile
 	fi
 
@@ -487,37 +614,61 @@ fi
 
 # Reinstall helper
 if [[ "$action" == "reinstall" ]]; then
-	echo "This will run curl -sS https://raw.githubusercontent.com/actuallymentor/battery/main/setup.sh | bash"
+	echo "This will run curl -sS ${github_url_setup_sh} | bash"
 	if [[ ! "$setting" == "silent" ]]; then
 		echo "Press any key to continue"
 		read
 	fi
-	curl -sS https://raw.githubusercontent.com/actuallymentor/battery/main/setup.sh | bash
+	curl -sS "$github_url_setup_sh" | bash
 	exit 0
 fi
 
-# Update helper
+# Update helper for GUI app
+if [[ "$action" == "update_silent" ]]; then
+
+	assert_running_as_root
+
+	# Exit with success when the GUI app just checks if passwordless updates are enabled
+	if [[ "$setting" == "is_enabled" ]]; then
+		exit 0
+	fi
+
+	# Try updating
+	if ! is_latest_version_installed; then
+		curl -sS "$github_url_update_sh" | bash
+		echo "✅ battery background script was updated to the latest version."
+	else
+		echo "☑️  No updates found"
+	fi
+
+	# Try updating the visudo configuration on each update attempt to ensure that a
+	# possibly broken installation is fixed.
+	# Note: this will overwrite the visudo configuration file only if it is outdated.
+	$battery_binary visudo
+
+	# Determine the name of unprivileged user
+	username="$(determine_unprivileged_user "")"
+	assert_unprivileged_user "$username"
+
+	# Use oportunity to fixup installation
+	fixup_installation_owner_mode "$username"
+
+	exit 0
+fi
+
+# Update helper for Terminal users
 if [[ "$action" == "update" ]]; then
 
-	# Check if we have the most recent version
-	if curl -sS https://raw.githubusercontent.com/actuallymentor/battery/main/battery.sh | grep -q "$BATTERY_CLI_VERSION"; then
-		echo "No need to update, offline version number $BATTERY_CLI_VERSION matches remote version number"
-	else
-		echo "This will run curl -sS https://raw.githubusercontent.com/actuallymentor/battery/main/update.sh | bash"
-		if [[ ! "$setting" == "silent" ]]; then
-			echo "Press any key to continue"
-			read
-		fi
-		curl -sS https://raw.githubusercontent.com/actuallymentor/battery/main/update.sh | bash
-		if [[ ! "$setting" == "silent" ]]; then
-			# The setting "silent" is always passed when `battery update` is invoked from the UI app,
-			# which decides whether to invoke `battery visudo` as well. But for Terminal-only users
-			# there is no UI app. So it's either we invoke `battery visudo` here, or assume that users
-			# remember to do it themselves, which did not work in the past.
-			echo "Runnig $battery_binary visudo"
-			$battery_binary visudo
-		fi
+	# Temporarily support the 'silent' setting for backward compatibility with older UI versions.
+	if [[ "$setting" == "silent" ]]; then
+		sudo -n $battery_binary update_silent
+		exit 0
 	fi
+
+	# If the visudo configuration has been removed, prompt for a password
+	# before running the "update_silent" action. Do not use "sudo -n" below.
+	sudo $battery_binary update_silent
+
 	exit 0
 fi
 
@@ -532,7 +683,7 @@ if [[ "$action" == "uninstall" ]]; then
 	enable_charging
 	disable_discharging
 	$battery_binary remove_daemon
-	sudo rm -v "$binfolder/smc" "$binfolder/battery" $visudo_file
+	sudo rm -v "$smc_binary" "$battery_binary" $visudo_file
 	sudo rm -v -r "$configfolder"
 	pkill -f "/usr/local/bin/battery.*"
 	exit 0
@@ -800,6 +951,8 @@ fi
 # Asynchronous battery level maintenance
 if [[ "$action" == "maintain" ]]; then
 
+	assert_not_running_as_root
+
 	# Kill old process silently
 	if test -f "$pidfile"; then
 		log "Killing old maintain process at $(cat $pidfile)"
@@ -905,15 +1058,15 @@ if [[ "$action" == "calibrate_synchronous" ]]; then
 	log "Starting calibration"
 
 	# Stop the maintaining
-	battery maintain stop
+	$battery_binary maintain stop
 
 	# Discharge battery to 15%
-	battery discharge 15
+	$battery_binary discharge 15
 
 	while true; do
 		log "checking if at 100%"
 		# Check if battery level has reached 100%
-		if battery status | head -n 1 | grep -q "Battery at 100%"; then
+		if $battery_binary status | head -n 1 | grep -q "Battery at 100%"; then
 			break
 		else
 			sleep 300
@@ -926,10 +1079,10 @@ if [[ "$action" == "calibrate_synchronous" ]]; then
 	sleep 3600
 
 	# Discharge battery to 80%
-	battery discharge 80
+	$battery_binary discharge 80
 
 	# Recover old maintain status
-	battery maintain recover
+	$battery_binary maintain recover
 	exit 0
 fi
 
@@ -952,7 +1105,7 @@ if [[ "$action" == "calibrate" ]]; then
 
 	# Start calibration script
 	log "Starting calibration script"
-	nohup battery calibrate_synchronous >>$logfile &
+	nohup $battery_binary calibrate_synchronous >>$logfile &
 
 	# Store pid of calibration process and setting
 	echo $! >$calibrate_pidfile
@@ -991,6 +1144,8 @@ fi
 # launchd daemon creator, inspiration: https://www.launchd.info/
 if [[ "$action" == "create_daemon" ]]; then
 
+	assert_not_running_as_root
+
 	call_action="maintain_synchronous"
 	if test -f "$maintain_voltage_tracker_file"; then
 		call_action="maintain_voltage_synchronous"
@@ -1005,7 +1160,7 @@ if [[ "$action" == "create_daemon" ]]; then
 		<string>com.battery.app</string>
 		<key>ProgramArguments</key>
 		<array>
-			<string>$binfolder/battery</string>
+			<string>$battery_binary</string>
 			<string>$call_action</string>
 			<string>recover</string>
 		</array>

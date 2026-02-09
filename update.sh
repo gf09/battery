@@ -1,32 +1,31 @@
 #!/bin/bash
 
-# Force-set path to include sbin
-PATH="$PATH:/usr/sbin"
-
-# Set environment variables
-tempfolder=~/.battery-tmp
-binfolder=/usr/local/bin
-batteryfolder="$tempfolder/battery"
-mkdir -p $batteryfolder
-
 echo -e "🔋 Starting battery update\n"
 
-# Write battery function as executable
+echo -n "[ 1 ] Allocating temp folder: "
+tempfolder="$(mktemp -d)"
+echo "$tempfolder"
+function cleanup() {
+	echo "[ 4 ] Removed temporary folder"
+	rm -rf "$tempfolder";
+}
+trap cleanup EXIT
 
-echo "[ 1 ] Downloading latest battery version"
-rm -rf $batteryfolder
-mkdir -p $batteryfolder
-curl -sS -o $batteryfolder/battery.sh https://raw.githubusercontent.com/actuallymentor/battery/main/battery.sh
+binfolder=/usr/local/bin
+updatefolder="$tempfolder/battery"
+mkdir -p $updatefolder
 
-echo "[ 2 ] Writing script to $binfolder/battery"
-cp $batteryfolder/battery.sh $binfolder/battery
-chown $USER $binfolder/battery
-chmod 755 $binfolder/battery
-chmod u+x $binfolder/battery
-
-# Remove tempfiles
-cd
-rm -rf $tempfolder
-echo "[ 3 ] Removed temporary folder"
-
-echo -e "\n🎉 Battery tool updated.\n"
+echo "[ 2 ] Downloading latest battery version"
+mkdir -p $updatefolder
+if curl -sS -o $updatefolder/battery.sh https://raw.githubusercontent.com/actuallymentor/battery/main/battery.sh; then
+	echo "[ 3 ] Writing script to $binfolder/battery"
+	set -eu
+	sudo install -d -m 755 -o root -g wheel "$binfolder"
+	sudo install -m 755 -o root -g wheel "$updatefolder/battery.sh" "$binfolder/battery"
+	sudo chown root:wheel "$binfolder/smc"
+	echo -e "\n🎉 Battery tool updated.\n"
+else
+	err=$?
+	echo -e "\n❌ Failed to download the update.\n"
+	exit $err
+fi

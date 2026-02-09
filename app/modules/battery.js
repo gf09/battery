@@ -112,7 +112,7 @@ const disable_battery_limiter = async () => {
 
 }
 
-const low_err_return_false = ( ...errdata ) => {
+const log_err_return_false = ( ...errdata ) => {
     log( 'Error in shell call: ', ...errdata )
     return false
 }
@@ -132,85 +132,62 @@ const initialize_battery = async () => {
         ] )
         log( `Internet online: ${ online }` )
 
-        // Check if battery is installed and visudo entries are complete. New visudo entries are added when we do new `sudo` stuff in battery.sh
-        // note to self: only added a few of the new entries, there is no need to be exhaustive except to make sure all new sudo stuff is covered
-        const smc_commands = [
-            // Old list
-            '-k CH0C -r',
-            '-k CH0I -r',
-            '-k ACLC -r',
-            // Apple introduced the following two in 2025.
-            // It seems to apply to all Apple Silicon MacBooks, regardless of macOS version.
-            '-k CHTE -r',
-            '-k CHIE -r'
-        ]
+        // Check if battery background executables are installed and owned by root.
         const [
-            battery_installed,
-            smc_installed,
-            charging_in_visudo,
-            discharging_in_visudo,
-            magsafe_led_in_visudo,
-            chte_charging_in_visudo,
-            chie_discharging_in_visudo,
+            bin_dir_root_owned,     // This is important. Other software can potentially change the owner allowing for battery executable replacement.
+            battery_installed,      // Make sure battery script exists and is root-owned.
+            smc_installed,          // Make sure smc binary exists and is root-owned.
+            silent_update_enabled   // Make sure visudo config is installed and allows passwordless update
         ] = await Promise.all( [
-            exec_async( `${ path_fix } which battery` ).catch( low_err_return_false ),
-            exec_async( `${ path_fix } which smc` ).catch( low_err_return_false ),
-            ...smc_commands.map( cmd => exec_async( `${ path_fix } sudo -n /usr/local/bin/smc ${ cmd }` ).catch( low_err_return_false ) )
+            exec_async( `${ path_fix } test "$(stat -f '%u' /usr/local/bin)" -eq 0` ).then( () => true ).catch( log_err_return_false ),
+            exec_async( `${ path_fix } test "$(stat -f '%u' /usr/local/bin/battery)" -eq 0` ).then( () => true ).catch( log_err_return_false ),
+            exec_async( `${ path_fix } test "$(stat -f '%u' /usr/local/bin/smc)" -eq 0` ).then( () => true ).catch( log_err_return_false ),
+            exec_async( `${ path_fix } sudo -n /usr/local/bin/battery update_silent is_enabled` ).then( () => true ).catch( log_err_return_false )
         ] )
-
-        const visudo_complete = ![ charging_in_visudo,  discharging_in_visudo,  magsafe_led_in_visudo, chte_charging_in_visudo, chie_discharging_in_visudo ].some( entry => entry === false )
-        const is_installed = battery_installed && smc_installed
-        log( 'Is installed? ', is_installed )
-        log( 'Visudo complete? ', {
-            charging_in_visudo,
-            discharging_in_visudo,
-            magsafe_led_in_visudo,
-            chte_charging_in_visudo,
-            chie_discharging_in_visudo,
-            visudo_complete
-        } )
+        const is_installed = bin_dir_root_owned && battery_installed && smc_installed && silent_update_enabled
+        log( 'Is installed? ', is_installed, 'details: ', bin_dir_root_owned, battery_installed, smc_installed, silent_update_enabled )
 
         // Kill running instances of battery
         const processes = await exec_async( `ps aux | grep "/usr/local/bin/battery " | wc -l | grep -Eo "\\d*"` )
         log( `Found ${ `${ processes }`.replace( /\n/, '' ) } battery related processed to kill` )
         if( is_installed ) await exec_async( `${ battery } maintain stop` )
-        await exec_async( `pkill -f "/usr/local/bin/battery.*"` ).catch( e => log( `Error killing existing battery progesses, usually means no running processes` ) )
+        await exec_async( `pkill -f "/usr/local/bin/battery.*"` ).catch( e => log( `Error killing existing battery processes, usually means no running processes` ) )
 
-        // If installed, update
-        if( is_installed && visudo_complete ) {
-            if( !online ) return log( `Skipping battery update because we are offline` )
-            if( skipupdate ) return log( `Skipping update due to environment variable` )
-            log( `Updating battery...` )
-            const result = await exec_async( `${ battery } update silent` ).catch( e => e )
-            log( `Update result: `, result )
-        }
-
-        // If not installed, run install script
+        // Reinstall or try updating
         if( !is_installed ) {
             log( `Installing battery for ${ USER }...` )
             if( !online ) return alert( `Battery needs an internet connection to download the latest version, please connect to the internet and open the app again.` )
-            if( !is_installed ) await alert( `Welcome to the Battery limiting tool. The app needs to install/update some components, so it will ask for your password. This should only be needed once.` )
-            const result = await exec_sudo_async( `curl -s https://raw.githubusercontent.com/actuallymentor/battery/main/setup.sh | bash -s -- $USER` )
-            log( `Install result success `, result )
-            await alert( `Battery background components installed successfully. You can find the battery limiter icon in the top right of your menu bar.` )
+            await alert( `Welcome to the Battery limiting tool. The app needs to install/update some components, so it will ask for your password. This should only be needed once.` )
+            try {
+                const result = await exec_sudo_async( `curl -s https://raw.githubusercontent.com/actuallymentor/battery/main/setup.sh | bash -s -- $USER` )
+                log( `Install result success `, result )
+                await alert( `Battery background components installed/updated successfully. You can find the battery limiter icon in the top right of your menu bar.` )
+            } catch ( e ) {
+                log( `Battery setup failed: `, e )
+                await alert( `Failed to install battery background components.\n\n${e.message}`)
+                app.quit()
+                app.exit()
+            }
+        } else {
+            // Try updating to the latest version
+            if( !online ) return log( `Skipping battery update because we are offline` )
+            if( skipupdate ) return log( `Skipping update due to environment variable` )
+            log( `Updating battery...` )
+            try {
+                const result = await exec_async( `${ path_fix } sudo -n /usr/local/bin/battery update_silent` )
+                log( `Update details: `, result )
+            } catch ( e ) {
+                log( `Battery update failed: `, e )
+                await alert( `Couldn’t complete the update.\n\n${e.message}`)
+            }
         }
-
-        // If visudo entries are incomplete, update
-        if( !visudo_complete ) {
-            await alert( `Battery needs to apply a backwards incompatible update, to do this it will ask for your password. This should not happen frequently.` )
-            await exec_sudo_async( `${ path_fix } battery visudo` )
-        }
-
-        // Recover old battery setting on boot (as we killed all old processes above)
-        await exec_async( `${ battery } maintain recover` )
 
         // Basic user tracking on app open, run it in the background so it does not cause any delay for the user
         if( online ) exec_async( `nohup curl "https://unidentifiedanalytics.web.app/touch/?namespace=battery" > /dev/null 2>&1` )
 
-
     } catch ( e ) {
-        log( `Update/install error: `, e )
-        await alert( `Error installing battery limiter: ${ e.message }` )
+        log( `Error Initializing battery: `, e )
+        await alert( `Battery limiter initialization error: ${ e.message }` )
         app.quit()
         app.exit()
     }
@@ -233,7 +210,6 @@ const uninstall_battery = async () => {
 
 }
 
-
 const is_limiter_enabled = async () => {
 
     try {
@@ -246,7 +222,6 @@ const is_limiter_enabled = async () => {
     }
 
 }
-
 
 module.exports = {
     enable_battery_limiter,
