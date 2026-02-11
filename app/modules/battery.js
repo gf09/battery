@@ -6,6 +6,23 @@ const { get_force_discharge_setting } = require( './settings' )
 const { USER } = process.env
 const path_fix = 'PATH=/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
 const battery = `${ path_fix } battery`
+
+/* ///////////////////////////////
+// Shell-execution helpers
+// ///////////////////////////////
+//
+// exec_async_no_timeout(), exec_async() and exec_sudo_async() are async helper functions
+// which run bash-shell commands.
+//
+// They provide a unified output contract:
+//      Fulfilled result: { stdout: string, stderr: string }
+//      Rejected result: 'Error' object having the following extra properties:
+//          - 'cmd':    shell command string
+//          - 'code':   shell exit code or 'ETIMEDOUT'
+//          - 'output': { stdout: string, stderr: string }
+//
+// /////////////////////////////*/
+
 const shell_options = {
     shell: '/bin/bash',
     env: { ...process.env, PATH: `${ process.env.PATH }:/usr/local/bin` }
@@ -18,21 +35,34 @@ const exec_async_no_timeout = command => new Promise( ( resolve, reject ) => {
 
     exec( command, shell_options, ( error, stdout, stderr ) => {
 
-        if( error ) return reject( error, stderr, stdout )
-        if( stderr ) return reject( stderr )
-        if( stdout ) return resolve( stdout )
-        if( !stdout ) return resolve( '' )
+        const output = { stdout: stdout ?? '', stderr: stderr ?? '' }
+        if (error) {
+            error.output = output
+            return reject( error )
+        } else {
+            return resolve( output )
+        }
 
     } )
 
 } )
 
-const exec_async = ( command, timeout_in_ms=2000, throw_on_timeout=false ) => Promise.race( [
-    exec_async_no_timeout( command ),
-    wait( timeout_in_ms ).then( () => {
-        if( throw_on_timeout ) throw new Error( `${ command } timed out` )
-    } )
-] )
+const exec_async = ( command, timeout_in_ms=0 ) => {
+
+    const workers = [ exec_async_no_timeout( command ) ]
+    if ( timeout_in_ms > 0 ) {
+        workers.push(
+            wait(timeout_in_ms).then( () => {
+                const err = new Error( `${ command } timed out` )
+                err.code = 'ETIMEDOUT'
+                err.output = { stdout: '', stderr: '' }
+                throw err;
+            })
+        );
+    }
+
+    return Promise.race( workers )
+}
 
 // Execute with sudo
 const exec_sudo_async = command => new Promise( ( resolve, reject ) => {
@@ -42,21 +72,28 @@ const exec_sudo_async = command => new Promise( ( resolve, reject ) => {
 
     exec( `osascript -e "do shell script \\"${ command }\\" with administrator privileges"`, shell_options, ( error, stdout, stderr ) => {
 
-        if( error ) return reject( error, stderr, stdout )
-        if( stderr ) return reject( stderr )
-        if( stdout ) return resolve( stdout )
-        if( !stdout ) return resolve( '' )
+        const output = { stdout: stdout ?? '', stderr: stderr ?? '' }
+        if (error) {
+            error.output = output
+            return reject(error)
+        } else {
+            return resolve(output)
+        }
 
     } )
 
 } )
 
+/* ///////////////////////////////
+// Battery cli functions
+// /////////////////////////////*/
+
 // Battery status checker
 const get_battery_status = async () => {
 
     try {
-        const message = await exec_async( `${ battery } status_csv` )
-        let [ percentage='??', remaining='', charging='', discharging='', maintain_percentage='' ] = message?.split( ',' ) || []
+        const result = await exec_async( `${ battery } status_csv` )
+        let [ percentage='??', remaining='', charging='', discharging='', maintain_percentage='' ] = result.stdout.split( ',' ) || []
         maintain_percentage = maintain_percentage.trim()
         maintain_percentage = maintain_percentage.length ? maintain_percentage : undefined
         charging = charging == 'enabled'
@@ -79,18 +116,20 @@ const get_battery_status = async () => {
 
 }
 
-/* ///////////////////////////////
-// Battery cli functions
-// /////////////////////////////*/
 const enable_battery_limiter = async () => {
 
-
     try {
-        // Start battery maintainer
         const status = await get_battery_status()
         const allow_force_discharge = get_force_discharge_setting()
-        await exec_async( `${ battery } maintain ${ status?.maintain_percentage || 80 }${ allow_force_discharge ? ' --force-discharge' : '' }` )
-        log( `enable_battery_limiter exec complete` )
+        // 'batery maintain' creates a child process, so when the command exits exec_async does not return.
+        // That's why here we use a timeout and wait for some time.
+        await exec_async(
+            `${ battery } maintain ${ status?.maintain_percentage || 80 }${ allow_force_discharge ? ' --force-discharge' : '' }`,
+            1000    // timeout in milliseconds
+        ).catch( e => {
+            if ( e.code !== 'ETIMEDOUT' ) throw e;
+        })
+        log( `enable_battery_limiter exec completed` )
         return status?.percentage
     } catch ( e ) {
         log( 'Error enabling battery: ', e )
@@ -149,7 +188,7 @@ const initialize_battery = async () => {
 
         // Kill running instances of battery
         const processes = await exec_async( `ps aux | grep "/usr/local/bin/battery " | wc -l | grep -Eo "\\d*"` )
-        log( `Found ${ `${ processes }`.replace( /\n/, '' ) } battery related processed to kill` )
+        log( `Found ${ `${ processes.stdout }`.replace( /\n/, '' ) } battery related processed to kill` )
         if( is_installed ) await exec_async( `${ battery } maintain stop` )
         await exec_async( `pkill -f "/usr/local/bin/battery.*"` ).catch( e => log( `Error killing existing battery processes, usually means no running processes` ) )
 
@@ -183,7 +222,7 @@ const initialize_battery = async () => {
         }
 
         // Basic user tracking on app open, run it in the background so it does not cause any delay for the user
-        if( online ) exec_async( `nohup curl "https://unidentifiedanalytics.web.app/touch/?namespace=battery" > /dev/null 2>&1` )
+        if( online ) exec_async( `nohup curl "https://unidentifiedanalytics.web.app/touch/?namespace=battery" > /dev/null 2>&1` ).catch(() => {})
 
     } catch ( e ) {
         log( `Error Initializing battery: `, e )
@@ -213,9 +252,9 @@ const uninstall_battery = async () => {
 const is_limiter_enabled = async () => {
 
     try {
-        const message = await exec_async( `${ battery } status` )
-        log( `Limiter status message: `, message )
-        return message?.includes( 'being maintained at' )
+        const result = await exec_async( `${ battery } status` )
+        log( `Limiter status message: `, result )
+        return result.stdout.includes( 'being maintained at' )
     } catch ( e ) {
         log( `Error getting battery status: `, e )
         alert( `Battery limiter error: ${ e.message }` )
