@@ -761,6 +761,8 @@ if [[ "$action" == "charge" ]]; then
 			caffeinate -is sleep 60
 		fi
 
+		battery_percentage=$(get_battery_percentage)
+
 	done
 
 	disable_charging
