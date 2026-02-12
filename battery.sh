@@ -550,8 +550,14 @@ if [[ $EUID -eq 0 ]]; then
 	fi
 fi
 
+# Version message
+if [[ "$action" == "version" ]] || [[ "$action" == "--version" ]]; then
+	echo "$BATTERY_CLI_VERSION"
+	exit 0
+fi
+
 # Help message
-if [ -z "$action" ] || [[ "$action" == "help" ]]; then
+if [ -z "$action" ] || [[ "$action" == "help" ]] || [[ "$action" == "--help" ]]; then
 	echo -e "$helpmessage"
 	exit 0
 fi
