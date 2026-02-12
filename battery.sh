@@ -169,7 +169,7 @@ subsetting=$3
 ## ###############
 
 function log() {
-	echo -e "$(date +%D-%T) - $1"
+	echo -e "$(date +%D-%T) [$$]: $*"
 }
 
 function valid_percentage() {
