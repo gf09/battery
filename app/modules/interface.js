@@ -177,7 +177,7 @@ const refresh_logo = async ( percent=80, force ) => {
 // /////////////////////////////*/
 async function set_initial_interface() {
 
-    log( "Starting tray app" )
+    log('\n===\n=== Starting tray app\n===\n')
     tray = new Tray( get_logo_template( 100, true ) )
 
     // Set "loading" context
