@@ -165,11 +165,12 @@ const initialize_battery = async () => {
         if( development ) log( `Dev mode on, skip updates: ${ skipupdate }` )
 
         // Check for network
-        const online = await Promise.race( [
-            exec_async( `${ path_fix } curl -I https://icanhazip.com &> /dev/null` ).then( () => true ).catch( () => false ),
-            exec_async( `${ path_fix } curl -I https://github.com &> /dev/null` ).then( () => true ).catch( () => false )
-        ] )
-        log( `Internet online: ${ online }` )
+        const online_check_timeout_millisec = 3000
+        const online = await Promise.any( [
+            exec_async( `${ path_fix } curl -I https://icanhazip.com  > /dev/null 2>&1`, online_check_timeout_millisec ),
+            exec_async( `${ path_fix } curl -I https://github.com  > /dev/null 2>&1`, online_check_timeout_millisec )
+        ] ).then( () => true ).catch( () => false )
+        log( `Internet online: `, online)
 
         // Check if battery background executables are installed and owned by root.
         const [
