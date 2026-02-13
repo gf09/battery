@@ -534,6 +534,9 @@ function fixup_installation_owner_mode() {
 }
 
 function is_latest_version_installed() {
+	# Check if content is reachable first with HEAD request
+	curl -sSI "$github_url_battery_sh" &>/dev/null || return 0
+	# Start downloading and check version
 	curl -sS "$github_url_battery_sh" 2>/dev/null | grep -q "$BATTERY_CLI_VERSION"
 }
 
