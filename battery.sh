@@ -78,11 +78,11 @@ Usage:
 
   battery logs LINES[integer, optional]
     output logs of the battery CLI and GUI
-	eg: battery logs 100
+    eg: battery logs 100
 
   battery maintain PERCENTAGE[1-100,stop] or RANGE[lower-upper]
     reboot-persistent battery level maintenance: turn off charging above, and on below a certain value
-	it has the option of a --force-discharge flag that discharges even when plugged in (this does NOT work well with clamshell mode)
+    it has the option of a --force-discharge flag that discharges even when plugged in (this does NOT work well with clamshell mode)
     eg: battery maintain 80           # maintain at 80%
     eg: battery maintain 70-80        # maintain between 70-80%
     eg: battery maintain stop
@@ -103,13 +103,15 @@ Usage:
 
   battery calibrate
     calibrate the battery by discharging it to 15%, then recharging it to 100%, and keeping it there for 1 hour
+    battery maintenance is restored upon completion
+    menubar battery app execution and/or battery maintain command will interrupt calibration
 
   battery charge LEVEL[1-100]
-    charge the battery to a certain percentage, and disable charging when that percentage is reached
+    charge the battery to a certain percentage; battery maintenance is restored upon completion
     eg: battery charge 90
 
   battery discharge LEVEL[1-100]
-    block power input from the adapter until battery falls to this level
+    block adapter power until the battery reaches the specified level; battery maintenance is restored upon completion
     eg: battery discharge 90
 
   battery visudo
@@ -750,18 +752,17 @@ if [[ "$action" == "charge" ]]; then
 		exit 1
 	fi
 
-	# Disable running daemon
-	$battery_binary maintain stop
-
-	# Disable charge blocker if enabled
-	$battery_binary adapter on
+	# Stop battery maintenance if invoked by user from Terminal
+	if [[ "$BATTERY_HELPER_MODE" != "1" ]]; then
+		$battery_binary maintain stop
+	fi
 
 	# Start charging
 	battery_percentage=$(get_battery_percentage)
 	log "Charging to $setting% from $battery_percentage%"
 	enable_charging # also disables discharging
 
-	# Loop until battery percent is exceeded
+	# Loop until battery charging level is reached
 	while [[ "$battery_percentage" -lt "$setting" ]]; do
 
 		if [[ "$battery_percentage" -ge "$((setting - 3))" ]]; then
@@ -777,6 +778,11 @@ if [[ "$action" == "charge" ]]; then
 	disable_charging
 	log "Charging completed at $battery_percentage%"
 
+	# Try restoring maintenance if invoked by user from Terminal
+	if [[ "$BATTERY_HELPER_MODE" != "1" ]]; then
+		$battery_binary maintain recover
+	fi
+
 	exit 0
 
 fi
@@ -789,12 +795,17 @@ if [[ "$action" == "discharge" ]]; then
 		exit 1
 	fi
 
-	# Start charging
+	# Stop battery maintenance if invoked by user from Terminal
+	if [[ "$BATTERY_HELPER_MODE" != "1" ]]; then
+		$battery_binary maintain stop
+	fi
+
+	# Start discharging
 	battery_percentage=$(get_battery_percentage)
 	log "Discharging to $setting% from $battery_percentage%"
 	enable_discharging
 
-	# Loop until battery percent is exceeded
+	# Loop until battery charging level is reached
 	while [[ "$battery_percentage" -gt "$setting" ]]; do
 
 		log "Battery at $battery_percentage% (target $setting%)"
@@ -805,6 +816,13 @@ if [[ "$action" == "discharge" ]]; then
 
 	disable_discharging
 	log "Discharging completed at $battery_percentage%"
+
+	# Try restoring maintenance if invoked by user from Terminal
+	if [[ "$BATTERY_HELPER_MODE" != "1" ]]; then
+		$battery_binary maintain recover
+	fi
+
+	exit 0
 
 fi
 
@@ -861,7 +879,7 @@ if [[ "$action" == "maintain_synchronous" ]]; then
 		# Before we start maintaining the battery level, first discharge to the target level
 		discharge_target="$lower_bound"
 		log "Triggering discharge to $discharge_target before enabling charging limiter"
-		$battery_binary discharge "$discharge_target"
+		BATTERY_HELPER_MODE=1 $battery_binary discharge "$discharge_target"
 		log "Discharge pre battery-maintenance complete, continuing to battery maintenance loop"
 	else
 		log "Not triggering discharge as it is not requested"
@@ -1065,62 +1083,43 @@ if [[ "$action" == "maintain" ]]; then
 fi
 
 # Battery calibration
-if [[ "$action" == "calibrate_synchronous" ]]; then
-	log "Starting calibration"
+if [[ "$action" == "calibrate" ]]; then
 
 	# Stop the maintaining
-	$battery_binary maintain stop
+	$battery_binary maintain stop &>/dev/null
 
-	# Discharge battery to 15%
-	$battery_binary discharge 15
-
-	while true; do
-		log "checking if at 100%"
-		# Check if battery level has reached 100%
-		if $battery_binary status | head -n 1 | grep -q "Battery at 100%"; then
-			break
-		else
-			sleep 300
-			continue
-		fi
-	done
-
-	# Wait before discharging to target level
-	log "reached 100%, maintaining for 1 hour"
-	sleep 3600
-
-	# Discharge battery to 80%
-	$battery_binary discharge 80
-
-	# Recover old maintain status
-	$battery_binary maintain recover
-	exit 0
-fi
-
-# Asynchronous battery level maintenance
-if [[ "$action" == "calibrate" ]]; then
 	# Kill old process silently
 	if test -f "$calibrate_pidfile"; then
 		pid=$(cat "$calibrate_pidfile" 2>/dev/null)
 		kill $pid &>/dev/null
 	fi
+	echo $$ >$calibrate_pidfile
 
-	if [[ "$setting" == "stop" ]]; then
-		log "Killing running calibration daemon"
-		pid=$(cat "$calibrate_pidfile" 2>/dev/null)
-		kill $pid &>/dev/null
-		rm $calibrate_pidfile 2>/dev/null
+	echo -e "Starting battery calibration\n"
 
-		exit 0
-	fi
+	echo "[ 1 ] Discharging battery to 15%"
+	BATTERY_HELPER_MODE=1 $battery_binary discharge 15 &>/dev/null
 
-	# Start calibration script
-	log "Starting calibration script"
-	nohup $battery_binary calibrate_synchronous >>$logfile &
+	echo "[ 2 ] Charging to 100%"
+	BATTERY_HELPER_MODE=1 $battery_binary charge 100 &>/dev/null
 
-	# Store pid of calibration process and setting
-	echo $! >$calibrate_pidfile
-	pid=$(cat "$calibrate_pidfile" 2>/dev/null)
+	echo "[ 3 ] Reached 100%, waiting for 1 hour"
+	enable_charging &>/dev/null
+	sleep 3600
+
+	echo "[ 4 ] Discharging battery to 80%"
+	BATTERY_HELPER_MODE=1 $battery_binary discharge 80 &>/dev/null
+
+	# Remove pidfile
+	rm -f $calibrate_pidfile
+
+	# Recover old maintain status
+	echo "[ 5 ] Restarting battery maintenance"
+	$battery_binary maintain recover &>/dev/null
+
+	echo -e "\n✅ Done\n"
+	exit 0
+
 fi
 
 # Status logger
