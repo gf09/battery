@@ -670,9 +670,9 @@ fi
 # Update helper for Terminal users
 if [[ "$action" == "update" ]]; then
 
-	# Temporarily support the 'silent' setting for backward compatibility with older UI versions.
+	# The older GUI versions 1_3_2 and below can not run silent passwordless update and
+	# will complain with alert. Just exit with success and let them update themselves.
 	if [[ "$setting" == "silent" ]]; then
-		sudo -n $battery_binary update_silent
 		exit 0
 	fi
 

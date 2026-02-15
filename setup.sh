@@ -95,7 +95,7 @@ sudo chmod 755 "$(dirname "$launch_agent_plist")"
 sudo chown -f $calling_user "$launch_agent_plist"
 
 echo "[ 8 ] Setup visudo configuration"
-sudo $binfolder/battery visudo $calling_user
+sudo $binfolder/battery visudo
 sudo chown -R $calling_user $configfolder
 
 # Remove tempfiles
