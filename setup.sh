@@ -13,7 +13,7 @@
 #   that can be executed with root privileges.
 #
 # For this reason:
-# - All battery-related binaries and scripts that are executed via sudo,
+# - All battery-related binaries and scripts that can be executed via sudo,
 #   including those that prompt for a user password, must be owned by root.
 # - They must not be writable by group or others.
 # - Their parent directories must also be owned by root and not be writable by
@@ -42,7 +42,6 @@ if [[ "$calling_user" == "root" ]]; then
 fi
 
 # Set variables
-tempfolder=/Users/$calling_user/.battery-tmp
 binfolder=/usr/local/bin
 configfolder=/Users/$calling_user/.battery
 pidfile=$configfolder/battery.pid
@@ -51,14 +50,19 @@ launch_agent_plist=/Users/$calling_user/Library/LaunchAgents/battery.plist
 
 # Ask for sudo once, in most systems this will cache the permissions for a bit
 sudo echo "🔋 Starting battery installation"
-echo "[ 1 ] Superuser permissions acquired."
+echo "[  1 ] Superuser permissions acquired."
 
 # Note: github names zips by <reponame>-<branchname>.replace( '/', '-' )
 update_branch="main"
 in_zip_folder_name="battery-$update_branch"
-batteryfolder="$tempfolder/battery"
 
-echo "[ 2 ] Downloading latest version of battery CLI"
+echo "[  2 ] Allocate temp folder"
+tempfolder="$(mktemp -d)"
+function cleanup() { rm -rf "$tempfolder"; }
+trap cleanup EXIT
+
+echo "[  3 ] Downloading latest version of battery CLI"
+batteryfolder="$tempfolder/battery"
 rm -rf $batteryfolder
 mkdir -p $batteryfolder
 curl -sSL -o $batteryfolder/repo.zip "https://github.com/actuallymentor/battery/archive/refs/heads/$update_branch.zip"
@@ -66,16 +70,16 @@ unzip -qq $batteryfolder/repo.zip -d $batteryfolder
 cp -r $batteryfolder/$in_zip_folder_name/* $batteryfolder
 rm $batteryfolder/repo.zip
 
-echo "[ 3 ] Make sure $binfolder exists and owned by root"
+echo "[  4 ] Make sure $binfolder exists and owned by root"
 sudo install -d -m 755 -o root -g wheel "$binfolder"
 
-echo "[ 4 ] Install prebuilt smc binary into $binfolder"
+echo "[  5 ] Install prebuilt smc binary into $binfolder"
 sudo install -m 755 -o root -g wheel "$batteryfolder/dist/smc" "$binfolder/smc"
 
-echo "[ 5 ] Install battery script into $binfolder"
+echo "[  6 ] Install battery script into $binfolder"
 sudo install -m 755 -o root -g wheel "$batteryfolder/battery.sh" "$binfolder/battery"
 
-echo "[ 6 ] Set ownership and permissions for $configfolder"
+echo "[  7 ] Set ownership and permissions for $configfolder"
 mkdir -p $configfolder
 sudo chown -R $calling_user $configfolder
 sudo chmod 755 $configfolder
@@ -89,17 +93,16 @@ sudo chown $calling_user $pidfile
 sudo chmod 644 $pidfile
 
 # Fix permissions for 'create_daemon' action
-echo "[ 7 ] Fix ownership and permissions for $(dirname "$launch_agent_plist")"
+echo "[  8 ] Fix ownership and permissions for $(dirname "$launch_agent_plist")"
 sudo chown $calling_user "$(dirname "$launch_agent_plist")"
 sudo chmod 755 "$(dirname "$launch_agent_plist")"
 sudo chown -f $calling_user "$launch_agent_plist"
 
-echo "[ 8 ] Setup visudo configuration"
+echo "[  9 ] Setup visudo configuration"
 sudo $binfolder/battery visudo
 sudo chown -R $calling_user $configfolder
 
-# Remove tempfiles
-echo "[ 9 ] Remove temp folder $tempfolder"
+echo "[ 10 ] Remove temp folder $tempfolder"
 rm -rf $tempfolder
 
 echo -e "\n🎉 Battery tool installed. Type \"battery help\" for instructions.\n"

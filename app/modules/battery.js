@@ -4,8 +4,8 @@ const { exec } = require( 'node:child_process' )
 const { log, alert, wait, confirm } = require( './helpers' )
 const { get_force_discharge_setting } = require( './settings' )
 const { USER } = process.env
-const path_fix = 'PATH=/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
-const battery = `${ path_fix } battery`
+const binfolder = '/usr/local/bin'
+const battery = `${ binfolder }/battery`
 
 /* ///////////////////////////////
 // Shell-execution helpers
@@ -18,14 +18,14 @@ const battery = `${ path_fix } battery`
 //      Fulfilled result: { stdout: string, stderr: string }
 //      Rejected result: 'Error' object having the following extra properties:
 //          - 'cmd':    shell command string
-//          - 'code':   shell exit code or 'ETIMEDOUT'
+//          - 'code':   shell exit code, 'ETIMEDOUT', 'SIGNAL' or 'UNKNOWN'
 //          - 'output': { stdout: string, stderr: string }
 //
 // /////////////////////////////*/
 
 const shell_options = {
     shell: '/bin/bash',
-    env: { ...process.env, PATH: `${ process.env.PATH }:/usr/local/bin` }
+    env: { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' }
 }
 
 // Execute without sudo
@@ -37,6 +37,8 @@ const exec_async_no_timeout = command => new Promise( ( resolve, reject ) => {
 
         const output = { stdout: stdout ?? '', stderr: stderr ?? '' }
         if (error) {
+            error.code ??= (error.signal ? 'SIGNAL' : 'UNKNOWN')
+            error.cmd ??= command
             error.output = output
             return reject( error )
         } else {
@@ -53,10 +55,11 @@ const exec_async = ( command, timeout_in_ms=0 ) => {
     if ( timeout_in_ms > 0 ) {
         workers.push(
             wait(timeout_in_ms).then( () => {
-                const err = new Error( `${ command } timed out` )
-                err.code = 'ETIMEDOUT'
-                err.output = { stdout: '', stderr: '' }
-                throw err;
+                const error = new Error( `${ command } timed out` )
+                error.code = 'ETIMEDOUT'
+                error.cmd = command
+                error.output = { stdout: '', stderr: '' }
+                throw error;
             })
         );
     }
@@ -74,6 +77,8 @@ const exec_sudo_async = command => new Promise( ( resolve, reject ) => {
 
         const output = { stdout: stdout ?? '', stderr: stderr ?? '' }
         if (error) {
+            error.code ??= (error.signal ? 'SIGNAL' : 'UNKNOWN')
+            error.cmd ??= command
             error.output = output
             return reject(error)
         } else {
@@ -167,8 +172,8 @@ const initialize_battery = async () => {
         // Check for network
         const online_check_timeout_millisec = 3000
         const online = await Promise.any( [
-            exec_async( `${ path_fix } curl -I https://icanhazip.com  > /dev/null 2>&1`, online_check_timeout_millisec ),
-            exec_async( `${ path_fix } curl -I https://github.com  > /dev/null 2>&1`, online_check_timeout_millisec )
+            exec_async( `curl -I https://icanhazip.com  > /dev/null 2>&1`, online_check_timeout_millisec ),
+            exec_async( `curl -I https://github.com  > /dev/null 2>&1`, online_check_timeout_millisec )
         ] ).then( () => true ).catch( () => false )
         log( `Internet online: `, online)
 
@@ -179,19 +184,19 @@ const initialize_battery = async () => {
             smc_installed,          // Make sure smc binary exists and is root-owned.
             silent_update_enabled   // Make sure visudo config is installed and allows passwordless update
         ] = await Promise.all( [
-            exec_async( `${ path_fix } test "$(stat -f '%u' /usr/local/bin)" -eq 0` ).then( () => true ).catch( log_err_return_false ),
-            exec_async( `${ path_fix } test "$(stat -f '%u' /usr/local/bin/battery)" -eq 0` ).then( () => true ).catch( log_err_return_false ),
-            exec_async( `${ path_fix } test "$(stat -f '%u' /usr/local/bin/smc)" -eq 0` ).then( () => true ).catch( log_err_return_false ),
-            exec_async( `${ path_fix } sudo -n /usr/local/bin/battery update_silent is_enabled` ).then( () => true ).catch( log_err_return_false )
+            exec_async( `test "$(stat -f '%u' /usr/local/bin)" -eq 0` ).then( () => true ).catch( log_err_return_false ),
+            exec_async( `test "$(stat -f '%u' ${ battery })" -eq 0` ).then( () => true ).catch( log_err_return_false ),
+            exec_async( `test "$(stat -f '%u' /usr/local/bin/smc)" -eq 0` ).then( () => true ).catch( log_err_return_false ),
+            exec_async( `sudo -n ${ battery } update_silent is_enabled` ).then( () => true ).catch( log_err_return_false )
         ] )
         const is_installed = bin_dir_root_owned && battery_installed && smc_installed && silent_update_enabled
         log( 'Is installed? ', is_installed, 'details: ', bin_dir_root_owned, battery_installed, smc_installed, silent_update_enabled )
 
         // Kill running instances of battery
-        const processes = await exec_async( `ps aux | grep "/usr/local/bin/battery " | wc -l | grep -Eo "\\d*"` )
+        const processes = await exec_async( `ps aux | grep "${ battery } " | wc -l | grep -Eo "\\d*"` )
         log( `Found ${ `${ processes.stdout }`.replace( /\n/, '' ) } battery related processed to kill` )
         if( is_installed ) await exec_async( `${ battery } maintain stop` )
-        await exec_async( `pkill -f "/usr/local/bin/battery.*"` ).catch( e => log( `Error killing existing battery processes, usually means no running processes` ) )
+        await exec_async( `pkill -f "${ battery }.*"` ).catch( e => log( `Error killing existing battery processes, usually means no running processes` ) )
 
         // Reinstall or try updating
         if( !is_installed ) {
@@ -214,7 +219,7 @@ const initialize_battery = async () => {
             if( skipupdate ) return log( `Skipping update due to environment variable` )
             log( `Updating battery...` )
             try {
-                const result = await exec_async( `${ path_fix } sudo -n /usr/local/bin/battery update_silent` )
+                const result = await exec_async( `sudo -n ${ battery } update_silent` )
                 log( `Update details: `, result )
             } catch ( e ) {
                 log( `Battery update failed: `, e )
@@ -239,7 +244,7 @@ const uninstall_battery = async () => {
     try {
         const confirmed = await confirm( `Are you sure you want to uninstall Battery?` )
         if( !confirmed ) return false
-        await exec_sudo_async( `${ path_fix } sudo battery uninstall silent` )
+        await exec_sudo_async( `sudo ${ battery } uninstall silent` )
         await alert( `Battery is now uninstalled!` )
         return true
     } catch ( e ) {
