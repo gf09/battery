@@ -4,7 +4,7 @@ const { exec } = require( 'node:child_process' )
 const { log, alert, wait, confirm } = require( './helpers' )
 const { get_force_discharge_setting } = require( './settings' )
 const { USER } = process.env
-const binfolder = '/usr/local/bin'
+const binfolder = '/usr/local/co.palokaj.battery'
 const battery = `${ binfolder }/battery`
 
 /* ///////////////////////////////
@@ -116,7 +116,14 @@ const get_battery_status = async () => {
 
     } catch ( e ) {
         log( `Error getting battery status: `, e )
-        alert( `Battery limiter error: ${ e.message }` )
+        await alert( `Battery limiter error: ${ e.message }` )
+        const ERR_COMMAND_NOT_FOUND = 127
+        if ( e.code === ERR_COMMAND_NOT_FOUND ) {
+            // No battery script found. Constant alerts will be preventing a user from quitting, so do it now.
+            // Happens if battery is uninstalled from Terminal while the app is running.
+            app.quit()
+            app.exit()
+        }
     }
 
 }
@@ -178,25 +185,29 @@ const initialize_battery = async () => {
         log( `Internet online: `, online)
 
         // Check if battery background executables are installed and owned by root.
+        // Note: We assume that ownership and permissions of /usr/local folders are SIP protected by macOS.
         const [
             bin_dir_root_owned,     // This is important. Other software can potentially change the owner allowing for battery executable replacement.
             battery_installed,      // Make sure battery script exists and is root-owned.
             smc_installed,          // Make sure smc binary exists and is root-owned.
             silent_update_enabled   // Make sure visudo config is installed and allows passwordless update
         ] = await Promise.all( [
-            exec_async( `test "$(stat -f '%u' /usr/local/bin)" -eq 0` ).then( () => true ).catch( log_err_return_false ),
-            exec_async( `test "$(stat -f '%u' ${ battery })" -eq 0` ).then( () => true ).catch( log_err_return_false ),
-            exec_async( `test "$(stat -f '%u' /usr/local/bin/smc)" -eq 0` ).then( () => true ).catch( log_err_return_false ),
+            exec_async( `test ! -L ${ binfolder } && test "$(stat -f '%u' ${ binfolder })" -eq 0` ).then( () => true ).catch( log_err_return_false ),
+            exec_async( `test ! -L ${ battery } && test "$(stat -f '%u' ${ battery })" -eq 0` ).then( () => true ).catch( log_err_return_false ),
+            exec_async( `test ! -L ${ binfolder }/smc && test "$(stat -f '%u' ${ binfolder }/smc)" -eq 0` ).then( () => true ).catch( log_err_return_false ),
             exec_async( `sudo -n ${ battery } update_silent is_enabled` ).then( () => true ).catch( log_err_return_false )
         ] )
         const is_installed = bin_dir_root_owned && battery_installed && smc_installed && silent_update_enabled
         log( 'Is installed? ', is_installed, 'details: ', bin_dir_root_owned, battery_installed, smc_installed, silent_update_enabled )
 
         // Kill running instances of battery
-        const processes = await exec_async( `ps aux | grep "${ battery } " | wc -l | grep -Eo "\\d*"` )
-        log( `Found ${ `${ processes.stdout }`.replace( /\n/, '' ) } battery related processed to kill` )
-        if( is_installed ) await exec_async( `${ battery } maintain stop` )
-        await exec_async( `pkill -f "${ battery }.*"` ).catch( e => log( `Error killing existing battery processes, usually means no running processes` ) )
+        // Why are we doing this: The maintenance battery process which launches on macOS startup does not update a
+        // pidfile (bug). Consider removing the following lines when process management improves.
+        if( is_installed ) await exec_async( `${ battery } maintain stop` ).catch( log_err_return_false )
+        const battery_process_pattern = `/usr/local/bin/battery.*|${battery.replace(/\./g, '\\.')}.*`
+        const processes = await exec_async( `ps aux | grep -E "${battery_process_pattern}" | grep -v grep | wc -l | grep -Eo "\\d*"` ).catch( e => e.output )
+        log( `Found '${ `${ processes.stdout }`.replace( /\n/, '' ) }' dangling battery processes to kill` )
+        await exec_async( `pkill -f "${battery_process_pattern}"` ).catch( e => log( `Error killing existing battery processes, usually means no running processes` ) )
 
         // Reinstall or try updating
         if( !is_installed ) {
@@ -244,7 +255,11 @@ const uninstall_battery = async () => {
     try {
         const confirmed = await confirm( `Are you sure you want to uninstall Battery?` )
         if( !confirmed ) return false
-        await exec_sudo_async( `sudo ${ battery } uninstall silent` )
+        await exec_sudo_async( `sudo ${ battery } uninstall silent` ).catch( e => {
+            // Being killed is an expected successful completion for 'battery uninstall' and the osascript running it.
+            // If you need to change this, check whether 'pkill -f <process cmd pattern>' is still used by 'battery uninstall'.
+            if ( e.code !== 'SIGNAL' ) throw e;
+        })
         await alert( `Battery is now uninstalled!` )
         return true
     } catch ( e ) {

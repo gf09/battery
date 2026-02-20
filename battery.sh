@@ -23,6 +23,7 @@ maintain_percentage_tracker_file=$configfolder/maintain.percentage
 maintain_voltage_tracker_file=$configfolder/maintain.voltage
 daemon_path=$HOME/Library/LaunchAgents/battery.plist
 calibrate_pidfile=$configfolder/calibrate.pid
+path_configfile=/etc/paths.d/50-battery
 
 # Voltage limits
 voltage_min="10.5"
@@ -34,11 +35,11 @@ voltage_hyst_max="2"
 # - ALWAYS hardcode and use the absolute path to the battery executables to avoid PATH-based spoofing.
 #   Think of the scenario where 'battery update_silent' running as root invokes 'battery visudo' as a
 #   PATH spoofing opportunity example.
-# - Ensure /usr/local/bin folder, this script, and the smc binary are root-owned and not writable by
+# - Ensure this script, smc binary and their parent folders are root-owned and not writable by
 #   the user or others.
 # - Ensure that you are not sourcing any user-writable scripts within this script to avoid overrides of
-#   critical variables.
-binfolder=/usr/local/bin
+#   security critical variables.
+binfolder="/usr/local/co.palokaj.battery"
 battery_binary="$binfolder/battery"
 smc_binary="$binfolder/smc"
 
@@ -116,10 +117,6 @@ Usage:
     block adapter power until the battery reaches the specified level; battery maintenance is restored upon completion
     eg: battery discharge 90
 
-  battery visudo
-    ensure you don't need to call battery with sudo
-    This is already used in the setup script, so you should't need it.
-
   battery update
     update the battery utility to the latest version
 
@@ -159,8 +156,7 @@ ALL ALL = NOPASSWD: LED_CONTROL
 # Temporarily keep passwordless SMC reading commands so the old menubar GUI versions don't ask for password on each launch
 # trying to execute 'battery visudo'. There is no harm in removing this, so do it as soon as you believe users are no
 # longer using old versions.
-Cmnd_Alias TMP_OLD_GUI_COMPATIBILITY = $smc_binary -k CH0B -r, $smc_binary -k CH0C -r, $smc_binary -k CH0I -r, $smc_binary -k ACLC -r, $smc_binary -k CHTE -r, $smc_binary -k CHIE -r, $smc_binary -k CH0J -r
-ALL ALL = NOPASSWD: TMP_OLD_GUI_COMPATIBILITY
+ALL ALL = NOPASSWD: $smc_binary -k CH0C -r, $smc_binary -k CH0I -r, $smc_binary -k ACLC -r, $smc_binary -k CHIE -r, $smc_binary -k CHTE -r
 "
 
 # Get parameters
@@ -654,8 +650,8 @@ if [[ "$action" == "update_silent" ]]; then
 		echo "☑️  No updates found"
 	fi
 
-	# Try updating the visudo configuration on each update attempt to ensure that a
-	# possibly broken installation is fixed.
+	# Update the visudo configuration on each update ensuring that the latest version
+	# is always installed.
 	# Note: this will overwrite the visudo configuration file only if it is outdated.
 	$battery_binary visudo
 
@@ -663,7 +659,7 @@ if [[ "$action" == "update_silent" ]]; then
 	username="$(determine_unprivileged_user "")"
 	assert_unprivileged_user "$username"
 
-	# Use oportunity to fixup installation
+	# Use opportunity to fixup installation
 	fixup_installation_owner_mode "$username"
 
 	exit 0
@@ -672,15 +668,49 @@ fi
 # Update helper for Terminal users
 if [[ "$action" == "update" ]]; then
 
+	assert_not_running_as_root
+
 	# The older GUI versions 1_3_2 and below can not run silent passwordless update and
 	# will complain with alert. Just exit with success and let them update themselves.
+	# Remove this condition in future versions when you believe the old UI is not used anymore.
 	if [[ "$setting" == "silent" ]]; then
 		exit 0
 	fi
 
-	# If the visudo configuration has been removed, prompt for a password
-	# before running the "update_silent" action. Do not use "sudo -n" below.
-	sudo $battery_binary update_silent
+	if ! curl -fsI "$github_url_battery_sh" &>/dev/null; then
+		echo "❌ Can't check for updates: no internet connection (or GitHub unreachable)."
+		exit 1
+	fi
+
+	# The code below repeats integrity checks from GUI app, specifically from
+	# app/modules/battery.js: 'initialize_battery'. Try keeping it consistent.
+
+	function check_installation_integrity() (
+		function not_link_and_root_owned() {
+			[[ ! -L "$1" ]] && [[ $(stat -f '%u' "$1") -eq 0 ]]
+		}
+
+		not_link_and_root_owned "$binfolder" && \
+		not_link_and_root_owned "$battery_binary" && \
+		not_link_and_root_owned "$smc_binary" && \
+		sudo -n "$battery_binary" update_silent is_enabled >/dev/null 2>&1
+	)
+
+	version_before="$($battery_binary version)"
+
+	if ! check_installation_integrity; then
+		echo -e "‼️ The battery installation seems to be broken. Forcing reinstall...\n"
+		$battery_binary reinstall silent
+		version_before="0" # Force restart maintenance process
+	else
+		sudo $battery_binary update_silent
+	fi
+
+	# Restart background maintenance process if update was installed
+	if [[ -x $battery_binary ]] && [[ "$($battery_binary version)" != "$version_before" ]]; then
+		printf "\n%s\n" "🛠️  Restarting 'battery maintain' ..."
+		$battery_binary maintain recover
+	fi
 
 	exit 0
 fi
@@ -693,12 +723,24 @@ if [[ "$action" == "uninstall" ]]; then
 		echo "Press any key to continue"
 		read
 	fi
+
+	$battery_binary maintain stop
+	$battery_binary remove_daemon
+
 	enable_charging
 	disable_discharging
-	$battery_binary remove_daemon
-	sudo rm -v "$smc_binary" "$battery_binary" $visudo_file
-	sudo rm -v -r "$configfolder"
-	pkill -f "/usr/local/bin/battery.*"
+
+	sudo rm -fv /usr/local/bin/battery
+	sudo rm -fv /usr/local/bin/smc
+
+	sudo rm -fv "$visudo_file"
+	sudo rm -frv "$binfolder"
+	sudo rm -frv "$configfolder"
+	sudo rm -fv "$path_configfile"
+
+	# Ensure no dangling battery processes are left running
+	pkill -f "/usr/local/bin/battery.*|/usr/local/co\.palokaj\.battery/battery.*"
+
 	exit 0
 fi
 
@@ -983,6 +1025,8 @@ fi
 if [[ "$action" == "maintain" ]]; then
 
 	assert_not_running_as_root
+
+	disable_discharging
 
 	# Kill old process silently
 	if test -f "$pidfile"; then

@@ -20,6 +20,9 @@
 #   unprivileged users, to prevent the replacement of executables.
 #
 
+# Reset PATH to minimal safe defaults
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
 # User welcome message
 echo -e "\n####################################################################"
 echo '# 👋 Welcome, this is the setup script for the battery CLI tool.'
@@ -42,19 +45,20 @@ if [[ "$calling_user" == "root" ]]; then
 fi
 
 # Set variables
-binfolder=/usr/local/bin
+binfolder=/usr/local/co.palokaj.battery
 configfolder=/Users/$calling_user/.battery
 pidfile=$configfolder/battery.pid
 logfile=$configfolder/battery.log
 launch_agent_plist=/Users/$calling_user/Library/LaunchAgents/battery.plist
+path_configfile=/etc/paths.d/50-battery
 
 # Ask for sudo once, in most systems this will cache the permissions for a bit
 sudo echo "🔋 Starting battery installation"
 echo "[  1 ] Superuser permissions acquired."
 
-# Note: github names zips by <reponame>-<branchname>.replace( '/', '-' )
-update_branch="main"
-in_zip_folder_name="battery-$update_branch"
+# Cleanup after versions 1_3_2 and below
+sudo rm -f /usr/local/bin/battery
+sudo rm -f /usr/local/bin/smc
 
 echo "[  2 ] Allocate temp folder"
 tempfolder="$(mktemp -d)"
@@ -62,6 +66,9 @@ function cleanup() { rm -rf "$tempfolder"; }
 trap cleanup EXIT
 
 echo "[  3 ] Downloading latest version of battery CLI"
+# Note: github names zips by <reponame>-<branchname>.replace( '/', '-' )
+update_branch="main"
+in_zip_folder_name="battery-$update_branch"
 batteryfolder="$tempfolder/battery"
 rm -rf $batteryfolder
 mkdir -p $batteryfolder
@@ -79,7 +86,22 @@ sudo install -m 755 -o root -g wheel "$batteryfolder/dist/smc" "$binfolder/smc"
 echo "[  6 ] Install battery script into $binfolder"
 sudo install -m 755 -o root -g wheel "$batteryfolder/battery.sh" "$binfolder/battery"
 
-echo "[  7 ] Set ownership and permissions for $configfolder"
+echo "[  7 ] Make sure the PATH environment variable includes '$binfolder'"
+if ! grep -qF "$binfolder" $path_configfile 2>/dev/null; then
+	printf '%s\n' "$binfolder" | sudo tee "$path_configfile" >/dev/null
+fi
+sudo chown root:wheel $path_configfile
+sudo chmod 644 $path_configfile
+# Create a symlink for rare shells that do not initialize PATH from /etc/paths.d (including the current one)
+sudo mkdir -p /usr/local/bin
+sudo ln -sf "$binfolder/battery" /usr/local/bin/battery
+sudo chown root:wheel /usr/local/bin/battery
+# Create a link to smc as well to silence older GUI apps running with updated background executables
+# (consider removing in the next releases)
+sudo ln -sf "$binfolder/smc" /usr/local/bin/smc
+sudo chown root:wheel /usr/local/bin/smc
+
+echo "[  8 ] Set ownership and permissions for $configfolder"
 mkdir -p $configfolder
 sudo chown -R $calling_user $configfolder
 sudo chmod 755 $configfolder
@@ -93,17 +115,17 @@ sudo chown $calling_user $pidfile
 sudo chmod 644 $pidfile
 
 # Fix permissions for 'create_daemon' action
-echo "[  8 ] Fix ownership and permissions for $(dirname "$launch_agent_plist")"
+echo "[  9 ] Fix ownership and permissions for $(dirname "$launch_agent_plist")"
 sudo chown $calling_user "$(dirname "$launch_agent_plist")"
 sudo chmod 755 "$(dirname "$launch_agent_plist")"
-sudo chown -f $calling_user "$launch_agent_plist"
+sudo chown -f $calling_user "$launch_agent_plist" 2>/dev/null
 
-echo "[  9 ] Setup visudo configuration"
+echo "[ 10 ] Setup visudo configuration"
 sudo $binfolder/battery visudo
-sudo chown -R $calling_user $configfolder
 
-echo "[ 10 ] Remove temp folder $tempfolder"
+echo "[ 11 ] Remove temp folder $tempfolder"
 rm -rf $tempfolder
 
 echo -e "\n🎉 Battery tool installed. Type \"battery help\" for instructions.\n"
+
 exit 0
