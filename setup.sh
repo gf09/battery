@@ -77,7 +77,8 @@ unzip -qq $batteryfolder/repo.zip -d $batteryfolder
 cp -r $batteryfolder/$in_zip_folder_name/* $batteryfolder
 rm $batteryfolder/repo.zip
 
-echo "[  4 ] Make sure $binfolder exists and owned by root"
+echo "[  4 ] Make sure $binfolder is recreated and owned by root"
+sudo rm -rf "$binfolder" # start with an empty $binfolder and ensure there is no symlink or file at the path
 sudo install -d -m 755 -o root -g wheel "$binfolder"
 
 echo "[  5 ] Install prebuilt smc binary into $binfolder"
