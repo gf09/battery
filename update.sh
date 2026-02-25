@@ -7,6 +7,9 @@ echo -e "🔋 Starting battery update\n"
 #   - Never include user-owned directories in PATH.
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
+# Ensure Ctrl+C stops the entire script, not just the current command
+trap 'exit 130' INT
+
 # Define the installation directory for the battery background executables
 binfolder="/usr/local/co.palokaj.battery"
 

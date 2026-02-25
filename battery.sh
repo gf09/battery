@@ -11,6 +11,9 @@ BATTERY_CLI_VERSION="v1.3.3"
 #   - Never include user-owned directories in PATH.
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
+# Ensure Ctrl+C stops the entire script, not just the current command
+trap 'exit 130' INT
+
 ## ###############
 ## Variables
 ## ###############
