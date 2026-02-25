@@ -1,5 +1,7 @@
 const { promises: fs } = require( 'fs' )
 const { HOME } = process.env
+const util = require( 'util' )
+
 let has_alerted_user_no_home = false
 
 const { dialog } = require( 'electron' )
@@ -21,7 +23,8 @@ const log = async ( ...messages ) => {
     try {
         if( HOME ) {
             await fs.mkdir( `${ HOME }/.battery/`, { recursive: true } )
-            await fs.appendFile( `${ HOME }/.battery/gui.log`, `${ messages.join( '\n' ) }\n`, 'utf8' )
+            const line = util.format(...messages) + "\n";
+            await fs.appendFile( `${ HOME }/.battery/gui.log`, line, 'utf8' )
         } else if( !has_alerted_user_no_home ) {
             alert( `No HOME variable set, this should never happen` )
             has_alerted_user_no_home = true
