@@ -494,7 +494,7 @@ function ensure_owner() {
 	local cur_owner=$(stat -f '%Su' "$path")
 	local cur_group=$(stat -f '%Sg' "$path")
 	if [[ $cur_owner != "$owner" || $cur_group != "$group" ]]; then
-		sudo chown "${owner}:${group}" "$path"
+		sudo chown -h "${owner}:${group}" "$path"
 	fi
 }
 
@@ -503,7 +503,7 @@ function ensure_owner_mode() {
 	ensure_owner "$owner" "$group" "$path" || return
 	local cur_mode=$(stat -f '%Lp' "$path")
 	if [[ $cur_mode != "${mode#0}" ]]; then
-		sudo chmod "$mode" "$path"
+		sudo chmod -h "$mode" "$path"
 	fi
 }
 
@@ -511,13 +511,6 @@ function ensure_owner_mode() {
 # This function is executed by 'update_silent' action with EUID==0.
 function fixup_installation_owner_mode() {
 	local username=$1
-
-	ensure_owner_mode root wheel 755 "$visudo_folder"
-	ensure_owner_mode root wheel 440 "$visudo_file"
-
-	ensure_owner_mode root wheel 755 "$binfolder"
-	ensure_owner_mode root wheel 755 "$battery_binary"
-	ensure_owner_mode root wheel 755 "$smc_binary"
 
 	ensure_owner_mode $username staff 755 "$(dirname "$daemon_path")"
 	ensure_owner_mode $username staff 644 "$daemon_path"
@@ -528,6 +521,13 @@ function fixup_installation_owner_mode() {
 	ensure_owner_mode $username staff 644 "$maintain_percentage_tracker_file"
 	ensure_owner_mode $username staff 644 "$maintain_voltage_tracker_file"
 	ensure_owner_mode $username staff 644 "$calibrate_pidfile"
+
+	ensure_owner_mode root wheel 755 "$visudo_folder"
+	ensure_owner_mode root wheel 440 "$visudo_file"
+
+	ensure_owner_mode root wheel 755 "$binfolder"
+	ensure_owner_mode root wheel 755 "$battery_binary"
+	ensure_owner_mode root wheel 755 "$smc_binary"
 
 	# Do some cleanup after previous versions
 	sudo rm -f "$configfolder/visudo.tmp"
@@ -696,13 +696,12 @@ if [[ "$action" == "update" ]]; then
 		sudo -n "$battery_binary" update_silent is_enabled >/dev/null 2>&1
 	)
 
-	version_before="$($battery_binary version)"
-
 	if ! check_installation_integrity; then
+		version_before="0" # Force restart maintenance process
 		echo -e "‼️ The battery installation seems to be broken. Forcing reinstall...\n"
 		$battery_binary reinstall silent
-		version_before="0" # Force restart maintenance process
 	else
+		version_before="$($battery_binary version)"
 		sudo $battery_binary update_silent
 	fi
 

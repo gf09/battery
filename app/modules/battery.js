@@ -133,7 +133,7 @@ const enable_battery_limiter = async () => {
     try {
         const status = await get_battery_status()
         const allow_force_discharge = get_force_discharge_setting()
-        // 'batery maintain' creates a child process, so when the command exits exec_async does not return.
+        // 'battery maintain' creates a child process, so when the command exits exec_async does not return.
         // That's why here we use a timeout and wait for some time.
         await exec_async(
             `${ battery } maintain ${ status?.maintain_percentage || 80 }${ allow_force_discharge ? ' --force-discharge' : '' }`,

@@ -1,6 +1,6 @@
 const { promises: fs } = require( 'fs' )
 const { HOME } = process.env
-const util = require("util");
+const util = require( 'util' )
 
 let has_alerted_user_no_home = false
 

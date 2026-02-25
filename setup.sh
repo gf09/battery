@@ -91,35 +91,35 @@ echo "[  7 ] Make sure the PATH environment variable includes '$binfolder'"
 if ! grep -qF "$binfolder" $path_configfile 2>/dev/null; then
 	printf '%s\n' "$binfolder" | sudo tee "$path_configfile" >/dev/null
 fi
-sudo chown root:wheel $path_configfile
-sudo chmod 644 $path_configfile
+sudo chown -h root:wheel $path_configfile
+sudo chmod -h 644 $path_configfile
 # Create a symlink for rare shells that do not initialize PATH from /etc/paths.d (including the current one)
 sudo mkdir -p /usr/local/bin
 sudo ln -sf "$binfolder/battery" /usr/local/bin/battery
-sudo chown root:wheel /usr/local/bin/battery
+sudo chown -h root:wheel /usr/local/bin/battery
 # Create a link to smc as well to silence older GUI apps running with updated background executables
 # (consider removing in the next releases)
 sudo ln -sf "$binfolder/smc" /usr/local/bin/smc
-sudo chown root:wheel /usr/local/bin/smc
+sudo chown -h root:wheel /usr/local/bin/smc
 
 echo "[  8 ] Set ownership and permissions for $configfolder"
 mkdir -p $configfolder
-sudo chown -R $calling_user $configfolder
-sudo chmod 755 $configfolder
+sudo chown -hRP $calling_user $configfolder
+sudo chmod -h 755 $configfolder
 
 touch $logfile
-sudo chown $calling_user $logfile
-sudo chmod 644 $logfile
+sudo chown -h $calling_user $logfile
+sudo chmod -h 644 $logfile
 
 touch $pidfile
-sudo chown $calling_user $pidfile
-sudo chmod 644 $pidfile
+sudo chown -h $calling_user $pidfile
+sudo chmod -h 644 $pidfile
 
 # Fix permissions for 'create_daemon' action
 echo "[  9 ] Fix ownership and permissions for $(dirname "$launch_agent_plist")"
-sudo chown $calling_user "$(dirname "$launch_agent_plist")"
-sudo chmod 755 "$(dirname "$launch_agent_plist")"
-sudo chown -f $calling_user "$launch_agent_plist" 2>/dev/null
+sudo chown -h $calling_user "$(dirname "$launch_agent_plist")"
+sudo chmod -h 755 "$(dirname "$launch_agent_plist")"
+sudo chown -hf $calling_user "$launch_agent_plist" 2>/dev/null
 
 echo "[ 10 ] Setup visudo configuration"
 sudo $binfolder/battery visudo
