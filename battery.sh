@@ -4,7 +4,7 @@
 ## Update management
 ## variables are used by this binary as well at the update script
 ## ###############
-BATTERY_CLI_VERSION="v1.3.2"
+BATTERY_CLI_VERSION="v1.3.3"
 
 # If a script may run as root:
 #   - Reset PATH to safe defaults at the very beginning of the script.
@@ -536,8 +536,13 @@ function fixup_installation_owner_mode() {
 function is_latest_version_installed() {
 	# Check if content is reachable first with HEAD request
 	curl -sSI "$github_url_battery_sh" &>/dev/null || return 0
-	# Start downloading and check version
-	curl -sS "$github_url_battery_sh" 2>/dev/null | grep -q "$BATTERY_CLI_VERSION"
+
+	# Download the remote script then check if our version string is present.
+	# Note: piping curl directly into grep -q causes a broken-pipe error (curl error 56)
+	# because grep -q exits on first match while curl is still writing.
+	local remote_script
+	remote_script="$(curl -sS "$github_url_battery_sh" 2>/dev/null)"
+	echo "$remote_script" | grep -q "$BATTERY_CLI_VERSION"
 }
 
 ## ###############
